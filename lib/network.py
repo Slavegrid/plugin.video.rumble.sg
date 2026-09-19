@@ -19,6 +19,12 @@ ADDON = xbmcaddon.Addon()
 
 BYPASS_CF_ENABLED = ADDON.getSettingBool('bypassCloudflare')
 
+# Rumble's Cloudflare rules answer the old Windows/Chrome-149.0.0.0 user agent
+# with a 403 "Just a moment..." challenge on every page request, which broke all
+# browsing. A plain Linux user agent passes.
+RUMBLE_USER_AGENT = ('Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36 '
+                     '(KHTML, like Gecko) Chrome/120 Safari/537.36')
+
 # Disable urllib3's "InsecureRequestWarning: Unverified HTTPS request is being made" warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -136,7 +142,7 @@ def request_get( url, data=None, extra_headers=None, redirects=True ):
         # headers
         my_headers = {
             'Accept-Language': 'en-gb,en;q=0.5',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+            'User-Agent': RUMBLE_USER_AGENT,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
             'Referer': url,
             'Cache-Control': 'no-cache',

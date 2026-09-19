@@ -14,7 +14,7 @@ import six
 from six.moves import urllib
 
 from lib.general import *
-from lib.network import request_get
+from lib.network import request_get, subscription_feed
 from lib.rumble_user import RumbleUser
 from lib.comments import CommentWindow
 
@@ -194,7 +194,11 @@ def pagination( url, page, cat, search=False ):
         if cat in { 'following', 'top', 'cat_list' }:
             paginated = False
 
-        amount = list_rumble( page_url, cat )
+        # subscriptions are read from the feed endpoint, not scraped from a page
+        if cat == 'subscriptions':
+            amount = subscriptions_list( page )
+        else:
+            amount = list_rumble( page_url, cat )
 
         if paginated and amount > 15 and page < 10:
 
@@ -237,6 +241,93 @@ def get_image( data, image_id ):
         image = ''
 
     return image
+
+
+def subscriptions_list( page=1 ):
+
+    """
+    Lists the signed-in user's Rumble subscription feed.
+
+    Rumble replaced the server rendered /subscriptions page (which this addon
+    used to scrape) with a client rendered one, so the feed is read from its
+    data endpoint instead of from page markup.
+    """
+
+    limit = 24
+    offset = ( int( page ) - 1 ) * limit
+
+    feed = subscription_feed( limit, offset )
+
+    if not feed:
+        notify( 'Unable to load subscriptions' )
+        xbmcplugin.endOfDirectory( PLUGIN_ID )
+        return 0
+
+    one_line_titles = ADDON.getSetting('one_line_titles') == 'true'
+    videos = feed.get( 'data', {} ).get( 'items', [] )
+    amount = 0
+
+    for video in videos:
+
+        # only items that are actually videos
+        if video.get( 'object_type' ) != 'video':
+            continue
+
+        link = video.get( 'url' )
+        if not link:
+            continue
+
+        video_title = '[B]' + clean_text( video.get( 'title', '' ) ) + '[/B]'
+
+        if video.get( 'is_short' ):
+            video_title += ' [COLOR white](Short)[/COLOR]'
+        if video.get( 'live' ) or video.get( 'livestream_status' ):
+            video_title += ' [COLOR red](Live)[/COLOR]'
+
+        # channel the video came from
+        author = video.get( 'by' ) or {}
+        channel_name = clean_text( author.get( 'title' ) or author.get( 'name' ) or '' )
+        subscribe_context = False
+
+        if channel_name:
+
+            video_title += ' - ' if one_line_titles else '\n'
+            video_title += '[COLOR gold]' + channel_name
+
+            if author.get( 'verified_badge' ):
+                video_title += ' (Verified)'
+
+            video_title += '[/COLOR]'
+
+            channel_link = strip_query_params( author.get( 'relative_url' ) or author.get( 'url' ) or '' )
+
+            if channel_link:
+                subscribe_context = { 'name' : channel_link, 'subscribe' : not author.get( 'followed', True ) }
+
+        info_labels = {}
+
+        upload_date = video.get( 'upload_date' )
+
+        if upload_date:
+
+            try:
+                year, month, day = upload_date[ :10 ].split('-')
+                info_labels[ 'year' ] = year
+                video_title += ' - [COLOR lime]' + get_date_formatted( DATE_FORMAT, year, month, day ) + '[/COLOR]'
+            except Exception:
+                pass
+
+        if video.get( 'duration' ):
+            info_labels[ 'duration' ] = video.get( 'duration' )
+
+        thumb = video.get( 'thumb' ) or ''
+        images = { 'thumb': thumb, 'fanart': thumb }
+
+        add_dir( video_title, link, 4, images, info_labels, 'subscriptions', False, True, 2, subscribe_context )
+
+        amount += 1
+
+    return amount
 
 
 def list_rumble( url, cat ):

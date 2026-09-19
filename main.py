@@ -1127,7 +1127,12 @@ def add_dir( name, url, mode, images = {}, info_labels = {}, cat = '', folder=Tr
     list_item.setProperty( 'fanart_image', art_dict[ 'fanart' ] )
 
     if subscribe_context and play == 2 and cat != 'channel_video':
-        context_menu.append(('Go to ' + subscribe_context['name'],'ActivateWindow(Videos, %s, return)' % build_url( {'mode': '3', 'url': BASE_URL + subscribe_context['name'], 'cat': 'channel'} )))
+
+        # Rumble serves channels and users as different page types and each
+        # needs its own parser, so /user/ pages must not be listed as 'channel'
+        go_cat = 'user' if subscribe_context['name'].startswith('/user/') else 'channel'
+
+        context_menu.append(('Go to ' + subscribe_context['name'],'ActivateWindow(Videos, %s, return)' % build_url( {'mode': '3', 'url': BASE_URL + subscribe_context['name'], 'cat': go_cat} )))
 
     if RUMBLE_USER.has_login_details():
 

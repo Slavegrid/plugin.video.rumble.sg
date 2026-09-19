@@ -772,12 +772,30 @@ def video_quality_select( urls ):
 
         # m3u8 check
         if len( urls ) == 1 and '.m3u8' in urls[0][1]:
+
+            master_url = urls[0][1]
+
+            # Nothing to choose between, so hand the manifest to
+            # inputstream.adaptive untouched and let its representation chooser
+            # pick a variant the device can actually decode. Pinning the highest
+            # variant here stalls 4K uploads on hardware that cannot decode
+            # them, and there is no fallback once a single variant is pinned.
+            if playback_method == 0 and PLAYBACK_CAP == 'Off':
+                return master_url
+
             from lib.m3u8 import m3u8
             m3u8_handler = m3u8()
-            urls = m3u8_handler.process( request_get( urls[0][1] ) )
+            urls = m3u8_handler.process( request_get( master_url ) )
+
+            if not urls:
+                # manifest we cannot parse: let inputstream.adaptive try it
+                return master_url
 
         if PLAYBACK_CAP != 'Off':
-            urls = [url for url in urls if int(url[0]) <= int( PLAYBACK_CAP ) ]
+            capped_urls = [url for url in urls if int(url[0]) <= int( PLAYBACK_CAP ) ]
+            # a limit that matches no variant at all would fail playback outright
+            if capped_urls:
+                urls = capped_urls
 
         if playback_method == 0:
             media_url = urls[0][1]

@@ -1,0 +1,7 @@
+# main.py and addon.xml use CRLF line endings, matching upstream
+# azzy9/plugin.video.rumble. Without this, git reports the CR at the end of
+# every added line in those files as "trailing whitespace", which buries the
+# real content of a diff. lib/network.py and the other lib files are LF and
+# need no entry.
+main.py   whitespace=cr-at-eol
+addon.xml whitespace=cr-at-eol

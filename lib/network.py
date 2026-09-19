@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import ssl
-import re
 import os
 import time
 import html
@@ -62,84 +61,83 @@ class TLS12HttpAdapter(HTTPAdapter):
 reqs = requests.session()
 tls_adapters = [TLS12HttpAdapter(), TLS11HttpAdapter()]
 
-def bypass_cloudflare(url, data):
+def flaresolverr_request( url, data=None, cookies=None, update_settings=False, notify_on_failure=False ):
 
     """
-    When active, this method will try to bypass cloudflare
-    using either Flaresolverr or Byparr
-    """
+    Asks FlareSolverr (or Byparr) to fetch a URL and returns the response body.
 
-    xbmc.log("Bypass Cloudflare: attempting")
+    Only the endpoints Cloudflare challenges need this. `update_settings` keeps
+    the historical bypass_cloudflare behaviour of storing the cookies and the
+    user agent FlareSolverr hands back; leave it off for a plain read, because
+    that user agent is rejected by Rumble's Cloudflare on ordinary page requests,
+    where storing it would break all browsing.
+    """
 
     try:
-        # get stored cookie string
-        cookies = ADDON.getSetting('cookies')
+        cookie_dict = stored_cookies() if cookies is None else cookies
+        timeout = ADDON.getSettingInt('flareSolverrTimeout') or 60
 
-        # split cookies into dictionary
-        if cookies:
-            cookie_dict = json.loads( cookies )
-        else:
-            cookie_dict = None
-
-        bypass_cf_headers = {"Content-Type": "application/json"}
-
-        timeout = ADDON.getSettingInt('flareSolverrTimeout')
-
-        bypass_cf_data = {
+        payload = {
+            'cmd': 'request.post' if data else 'request.get',
             'url': url,
             'maxTimeout': 1000 * timeout,
             'disableMedia': True,
         }
 
         if data:
-            bypass_cf_data['cmd'] = 'request.post'
-            bypass_cf_data['postData'] = urllib.parse.urlencode(data)
-        else:
-            bypass_cf_data['cmd'] = 'request.get'
+            payload[ 'postData' ] = urllib.parse.urlencode( data )
 
-        # add authentication cookie
-        if cookie_dict and cookie_dict.get( 'u_s', False ):
-            bypass_cf_data['cookies'] = [{"name":"u_s","value":cookie_dict[ 'u_s' ]}]
+        if cookie_dict:
+            payload[ 'cookies' ] = [
+                { 'name': name, 'value': value } for name, value in cookie_dict.items()
+            ]
 
         response = reqs.post(
-            ADDON.getSetting('flareSolverrUrl'),
-            headers=bypass_cf_headers,
-            json=bypass_cf_data,
+            ADDON.getSetting('flareSolverrUrl') or DEFAULT_FLARESOLVERR_URL,
+            headers={ "Content-Type": "application/json" },
+            json=payload,
             verify=False,
-            timeout=timeout
+            timeout=timeout + 30
         )
         response.raise_for_status()
 
-        js = response.json()
+        solution = response.json().get( 'solution', {} )
 
-        cookies = {}
-        for cookie in js['solution']['cookies']:
-            cookies[cookie['name']] = cookie['value']
+        if update_settings:
+            solved = { cookie[ 'name' ]: cookie[ 'value' ] for cookie in solution.get( 'cookies', [] ) }
 
-        if cookie_dict:
-            cookie_dict.update( cookies )
-        else:
-            cookie_dict = cookies
+            if solved:
+                stored = stored_cookies()
+                stored.update( solved )
+                ADDON.setSetting( 'cookies', json.dumps( stored ) )
 
-        # set cloudflare cookies
-        ADDON.setSetting('cookies', json.dumps(cookie_dict))
-        # Set returned user-agent to use with future requests
-        ADDON.setSetting('flareSolverrUserAgent', js['solution']['userAgent'])
+            # kept for the setting's consumers; see the note above
+            if solution.get( 'userAgent' ):
+                ADDON.setSetting( 'flareSolverrUserAgent', solution[ 'userAgent' ] )
 
-        return_response = js['solution']['response']
+        xbmc.log( "Bypass Cloudflare: fetched " + url )
 
-        if '</pre>' in return_response and 'json-formatter-container' in return_response:
-            json_body = re.compile(r'<pre>(.*)<\/pre>', re.MULTILINE|re.DOTALL|re.IGNORECASE).findall(return_response)
-            if json_body:
-                return_response = json_body[0]
-
-        return return_response
+        return solution.get( 'response', '' )
 
     except Exception as err_str:
-        dialog = xbmcgui.Dialog()
-        dialog.notification("Cloudflare bypass failed", str(err_str), icon=xbmcgui.NOTIFICATION_ERROR)
-        xbmc.log("Bypass Cloudflare: failed - " + str(err_str), xbmc.LOGWARNING)
-    return False
+        xbmc.log( "Bypass Cloudflare: failed - " + str(err_str), xbmc.LOGWARNING )
+
+        if notify_on_failure:
+            dialog = xbmcgui.Dialog()
+            dialog.notification("Cloudflare bypass failed", str(err_str), icon=xbmcgui.NOTIFICATION_ERROR)
+
+    return ''
+
+def bypass_cloudflare(url, data):
+
+    """
+    The addon's original bypass entry point, called by request_get's 403 handler
+    when the bypassCloudflare setting is on. Keeps the settings write-back.
+    """
+
+    return unwrap_pre_json(
+        flaresolverr_request( url, data, update_settings=True, notify_on_failure=True )
+    )
 
 def request_get( url, data=None, extra_headers=None, redirects=True ):
 
@@ -235,25 +233,40 @@ def stored_cookies():
     return {}
 
 
+def unwrap_pre_json( body ):
+
+    """
+    FlareSolverr renders a JSON response in a browser, so it comes back inside an
+    HTML <pre> block. Returns the JSON text when that block holds JSON, otherwise
+    the body untouched - a solved page is HTML, not JSON.
+    """
+
+    if not body or '<pre>' not in body:
+        return body
+
+    inner = body.split( '<pre>', 1 )[1]
+
+    if '</pre>' in inner:
+        inner = inner.split( '</pre>', 1 )[0]
+
+    inner = html.unescape( inner ).strip()
+
+    if inner.startswith('{') or inner.startswith('['):
+        return inner
+
+    return body
+
+
 def parse_json_body( body ):
 
-    """
-    Parses a JSON response body.
-
-    FlareSolverr renders a JSON response in a browser, so it comes back wrapped
-    in an HTML <pre> block; unwrap that before parsing.
-    """
+    """ Parses a JSON response body, tolerating FlareSolverr's <pre> wrapper """
 
     if not body:
         return None
 
-    body = body.strip()
+    body = unwrap_pre_json( body ).strip()
 
-    if '<pre>' in body:
-        body = body.split( '<pre>', 1 )[1]
-        body = body.split( '</pre>', 1 )[0]
-        body = html.unescape( body ).strip()
-    elif body.startswith('<'):
+    if body.startswith('<'):
         start, end = body.find('{'), body.rfind('}')
         if start == -1 or end <= start:
             return None
@@ -268,49 +281,13 @@ def parse_json_body( body ):
 def flaresolverr_get( url ):
 
     """
-    Fetches a URL through FlareSolverr.
+    Fetches a URL through FlareSolverr without touching settings.
 
     service.php (which serves the subscription feed) answers a JavaScript
-    challenge to plain HTTP clients, so it has to be requested by a real
-    browser. The stored login cookies are forwarded so the response is the
-    signed-in user's own data.
+    challenge to plain HTTP clients, so it has to be requested by a real browser.
     """
 
-    try:
-        cookie_dict = stored_cookies()
-        timeout = ADDON.getSettingInt('flareSolverrTimeout') or 60
-
-        payload = {
-            'cmd': 'request.get',
-            'url': url,
-            'maxTimeout': 1000 * timeout,
-            'disableMedia': True,
-        }
-
-        if cookie_dict:
-            payload[ 'cookies' ] = [
-                { 'name': name, 'value': value } for name, value in cookie_dict.items()
-            ]
-
-        response = reqs.post(
-            ADDON.getSetting('flareSolverrUrl') or DEFAULT_FLARESOLVERR_URL,
-            headers={ 'Content-Type': 'application/json' },
-            json=payload,
-            verify=False,
-            timeout=timeout + 30
-        )
-        response.raise_for_status()
-
-        solution = response.json().get( 'solution', {} )
-
-        xbmc.log( 'Rumble: FlareSolverr fetched ' + url )
-
-        return solution.get( 'response', '' )
-
-    except Exception as err_str:
-        xbmc.log( 'Rumble: FlareSolverr request failed - ' + str( err_str ), xbmc.LOGWARNING )
-
-    return ''
+    return flaresolverr_request( url )
 
 
 FEED_CACHE_SECONDS = 300

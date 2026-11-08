@@ -659,6 +659,16 @@ def video_quality_select( urls ):
 
     if urls:
 
+        # Rumble lists an "auto" pseudo-quality that points at the HLS master
+        # manifest. With no quality cap requested, hand that manifest to
+        # inputstream.adaptive untouched so its representation chooser picks a
+        # variant this device can decode (pinning one variant stalls 4K uploads
+        # on hardware without a 4K decoder, with no ABR fallback).
+        if playback_method == 0 and PLAYBACK_CAP == 'Off':
+            for label, variant in urls:
+                if str( label ).lower() == 'auto' and '.m3u8' in variant:
+                    return variant
+
         # m3u8 check
         if len( urls ) == 1 and '.m3u8' in urls[0][1]:
 
@@ -681,7 +691,14 @@ def video_quality_select( urls ):
                 return master_url
 
         if PLAYBACK_CAP != 'Off':
-            capped_urls = [url for url in urls if int(url[0]) <= int( PLAYBACK_CAP ) ]
+            capped_urls = []
+            for url in urls:
+                try:
+                    if int( url[0] ) <= int( PLAYBACK_CAP ):
+                        capped_urls.append( url )
+                except (TypeError, ValueError):
+                    # labels like 'auto' carry no height and cannot be capped
+                    continue
             # a limit that matches no variant at all would fail playback outright
             if capped_urls:
                 urls = capped_urls

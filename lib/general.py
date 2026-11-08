@@ -25,8 +25,11 @@ def sort_sizes(e):
 
     try:
         return int( e[0] )
-    except ValueError:
-        return e[0]
+    except (TypeError, ValueError):
+        # Rumble ships an "auto" HLS manifest alongside 360/720/1080, and a
+        # str key next to int keys makes sort() raise TypeError. Return an
+        # int for every label so mixed quality lists stay sortable.
+        return -1
 
 def build_url(query):
 

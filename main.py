@@ -594,6 +594,7 @@ def resolver( url ):
 
     urls = []
     subtitles = []
+    master_url = False
 
     # resolve shorts
     if '/shorts/' in url:
@@ -632,6 +633,11 @@ def resolver( url ):
                             for quality, stream in streams.items():
                                 if stream and stream.get( 'url', False ):
                                     if quality == 'auto':
+                                        # Keep the master manifest reachable: it
+                                        # is the only entry that lets
+                                        # inputstream.adaptive pick a variant the
+                                        # device can decode.
+                                        master_url = stream[ 'url' ]
                                         quality = str(max_width)
                                     urls.append(( quality, stream[ 'url' ] ))
                             break
@@ -649,9 +655,9 @@ def resolver( url ):
         # sort sizes
         urls.sort(reverse=True, key=sort_sizes)
 
-    return { 'urls': urls, 'subtitles': subtitles }
+    return { 'urls': urls, 'subtitles': subtitles, 'master': master_url }
 
-def video_quality_select( urls ):
+def video_quality_select( urls, master_url=False ):
 
     """ Resolves a URL for rumble & returns resolved resouces """
 
@@ -661,6 +667,13 @@ def video_quality_select( urls ):
     media_url = False
 
     if urls:
+
+        # Nothing to choose between and no cap requested: hand the "auto" master
+        # manifest to inputstream.adaptive untouched. Its relabelled copy sorts
+        # below any quality key above data['h'] (1081 > 1080, 2161 > 2160 on 4K
+        # uploads), and a pinned top variant stalls hardware without that decoder.
+        if playback_method == 0 and PLAYBACK_CAP == 'Off' and master_url:
+            return master_url
 
         # m3u8 check
         if len( urls ) == 1 and '.m3u8' in urls[0][1]:
@@ -742,7 +755,7 @@ def play_video( name, url, thumb, play=2 ):
 
     # get video link
     resolved = resolver(url)
-    url = video_quality_select( resolved[ 'urls' ] )
+    url = video_quality_select( resolved[ 'urls' ], resolved.get( 'master', False ) )
 
     if url:
 
